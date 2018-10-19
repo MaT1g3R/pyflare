@@ -1,52 +1,61 @@
-#! /usr/bin/python
+#!/usr/bin/env python3
 import json
 
-import requests
-
-with open('config.json') as json_data_file:
-    config = json.load(json_data_file)
-
-email = config['email']
-key = config['key']
-zone = config['zone']
-record = config['record']
-
-
-def ipify():
-    r = requests.get("https://api.ipify.org/")
-    r.raise_for_status()
-    return r.text
+from requests import session
 
 
 class Cloudflare:
-    def __init__(self, email, key):
+    def __init__(self):
+        with open('config.json') as json_data_file:
+            config = json.load(json_data_file)
+        email = config['email']
+        key = config['key']
+        self.zone = config['zone']
+        self.records = config['records']
+
         self.endpoint = "https://api.cloudflare.com/client/v4"
         self.headers = {'X-Auth-Email': email, 'X-Auth-Key': key, 'Content-Type': 'application/json'}
 
+        self.session = session()
+
+        self.ip = self.get_ip()
+        self.session.headers.update(self.headers)
+
     def user(self):
-        r = requests.get(self.endpoint + "/user", headers=self.headers)
+        r = self.session.get(self.endpoint + "/user", headers=self.headers)
         return r.json()
 
-    def zones(self, zone):
-        payload = {'name': zone}
-        r = requests.get(self.endpoint + "/zones", headers=self.headers, params=payload)
+    def zones(self):
+        payload = {'name': self.zone}
+        r = self.session.get(self.endpoint + "/zones", headers=self.headers, params=payload)
         return r.json()
 
     def dns_records(self, zone_id, record):
         payload = {'name': record}
-        r = requests.get(self.endpoint + "/zones/" + zone_id + "/dns_records", headers=self.headers, params=payload)
+        r = self.session.get(self.endpoint + "/zones/" + zone_id + "/dns_records", headers=self.headers, params=payload)
         return r.json()
 
-    def update_record(self, zone_id, record_id, record, ip_address):
-        payload = {'type': 'A', 'name': record, 'content': ip_address}
-        r = requests.put(self.endpoint + "/zones/" + zone_id + "/dns_records/" + record_id, headers=self.headers, data=json.dumps(payload))
+    def update_record(self, zone_id, record_id, record):
+        payload = {'type': 'A', 'name': record, 'content': self.ip}
+        r = self.session.put(self.endpoint + "/zones/" + zone_id + "/dns_records/" + record_id, headers=self.headers, data=json.dumps(payload))
         return r.json()
 
+    def get_ip(self):
+        r = self.session.get("https://httpbin.org/get")
+        r.raise_for_status()
+        return r.json()['origin']
 
-cf = Cloudflare(email, key)
-zone_id = cf.zones(zone)['result'][0]['id']
-record_id = cf.dns_records(zone_id, record)['result'][0]['id']
+    def __call__(self):
+        with self.session:
+            zone_id = self.zones()['result'][0]['id']
+            for record in self.records:
+                record_id = self.dns_records(zone_id, record).get('result', [{}])[0].get('id')
+                if not record_id:
+                    print('Cannot find record id for {}, skipping'.format(record))
+                    continue
+                print(self.update_record(zone_id, record_id, record))
 
-ip_address = ipify()
 
-print(cf.update_record(zone_id, record_id, record, ip_address))
+if __name__ == '__main__':
+    cf = Cloudflare()
+    cf()
